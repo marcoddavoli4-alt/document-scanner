@@ -2,7 +2,7 @@ from flask import Flask, request, send_file
 import cv2
 import numpy as np
 import io
-import fitz  # PyMuPDF
+from pdf2image import convert_from_bytes
 
 app = Flask(__name__)
 
@@ -48,15 +48,13 @@ def scan_document(image_bytes):
 @app.route('/scan', methods=['POST'])
 def scan():
     data = request.data
-    # Prova a leggere come PDF
     try:
-        pdf = fitz.open(stream=data, filetype="pdf")
-        page = pdf[0]
-        mat = fitz.Matrix(2, 2)  # 2x zoom per alta qualità
-        pix = page.get_pixmap(matrix=mat)
-        image_bytes = pix.tobytes("png")
+        images = convert_from_bytes(data, dpi=300)
+        img_pil = images[0]
+        buf = io.BytesIO()
+        img_pil.save(buf, format='PNG')
+        image_bytes = buf.getvalue()
     except Exception:
-        # Non è un PDF, trattalo come immagine
         image_bytes = data
     scanned = scan_document(image_bytes)
     return send_file(io.BytesIO(scanned), mimetype='image/png')
