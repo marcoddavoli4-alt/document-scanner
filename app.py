@@ -43,8 +43,12 @@ def scan_document(image_bytes):
     gray2 = cv2.cvtColor(result, cv2.COLOR_BGR2GRAY)
     final = cv2.adaptiveThreshold(gray2, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
                                    cv2.THRESH_BINARY, 11, 10)
-    _, buf = cv2.imencode('.png', final)
-    return buf.tobytes()
+    # Converti direttamente in PDF
+    pil_img = Image.fromarray(final)
+    pdf_buf = io.BytesIO()
+    pil_img.convert('RGB').save(pdf_buf, format='PDF', resolution=300)
+    pdf_buf.seek(0)
+    return pdf_buf.read()
 
 @app.route('/scan', methods=['POST'])
 def scan():
@@ -57,17 +61,8 @@ def scan():
         image_bytes = buf.getvalue()
     except Exception:
         image_bytes = data
-    scanned = scan_document(image_bytes)
-    return send_file(io.BytesIO(scanned), mimetype='image/png')
-
-@app.route('/to-pdf', methods=['POST'])
-def to_pdf():
-    image_bytes = request.data
-    img = Image.open(io.BytesIO(image_bytes))
-    pdf_buf = io.BytesIO()
-    img.convert('RGB').save(pdf_buf, format='PDF', resolution=300)
-    pdf_buf.seek(0)
-    return send_file(pdf_buf, mimetype='application/pdf')
+    scanned_pdf = scan_document(image_bytes)
+    return send_file(io.BytesIO(scanned_pdf), mimetype='application/pdf')
 
 @app.route('/health')
 def health():
