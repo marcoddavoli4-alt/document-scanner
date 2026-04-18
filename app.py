@@ -3,6 +3,7 @@ import cv2
 import numpy as np
 import io
 from pdf2image import convert_from_bytes
+from PIL import Image
 
 app = Flask(__name__)
 
@@ -58,6 +59,15 @@ def scan():
         image_bytes = data
     scanned = scan_document(image_bytes)
     return send_file(io.BytesIO(scanned), mimetype='image/png')
+
+@app.route('/to-pdf', methods=['POST'])
+def to_pdf():
+    image_bytes = request.data
+    img = Image.open(io.BytesIO(image_bytes))
+    pdf_buf = io.BytesIO()
+    img.convert('RGB').save(pdf_buf, format='PDF', resolution=300)
+    pdf_buf.seek(0)
+    return send_file(pdf_buf, mimetype='application/pdf')
 
 @app.route('/health')
 def health():
