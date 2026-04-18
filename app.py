@@ -7,43 +7,83 @@ from PIL import Image
 
 app = Flask(__name__)
 
-def scan_document(image_bytes):
-    nparr = np.frombuffer(image_bytes, np.uint8)
-    img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+def crop_document(img):
     orig = img.copy()
-    ratio = img.shape[0] / 500.0
-    small = cv2.resize(img, (int(img.shape[1] / ratio), 500))
+    h, w = img.shape[:2]
+    
+    # Ridimensiona per elaborazione
+    ratio = h / 800.0
+    small = cv2.resize(img, (int(w / ratio), 800))
+    
+    # Converti in grigio e trova bordi
     gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
     blur = cv2.GaussianBlur(gray, (5, 5), 0)
-    edged = cv2.Canny(blur, 75, 200)
-    cnts, _ = cv2.findContours(edged.copy(), cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
-    cnts = sorted(cnts, key=cv2.contourArea, reverse=True)[:5]
-    doc = None
+    edged = cv2.Canny(blur, 30, 150)
+    
+    # Dilata i bordi per connettere linee spezzate
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
+    edged = cv2.dilate(edged, kernel, iterations=2)
+    
+    # Trova contorni
+    cnts, _ = cv2.findContours(edged.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    cnts = sorted(cnts, key=cv2.contourArea, reverse=True)[:10]
+    
+    doc_cnt = None
     for c in cnts:
         peri = cv2.arcLength(c, True)
         approx = cv2.approxPolyDP(c, 0.02 * peri, True)
         if len(approx) == 4:
-            doc = approx
+            doc_cnt = approx
             break
-    if doc is not None:
-        pts = doc.reshape(4, 2) * ratio
+    
+    if doc_cnt is not None:
+        # Raddrizza prospettiva
+        pts = doc_cnt.reshape(4, 2) * ratio
         s = pts.sum(axis=1)
         diff = np.diff(pts, axis=1)
-        rect = np.array([pts[np.argmin(s)], pts[np.argmin(diff)],
-                         pts[np.argmax(s)], pts[np.argmax(diff)]], dtype="float32")
+        rect = np.array([
+            pts[np.argmin(s)],
+            pts[np.argmin(diff)],
+            pts[np.argmax(s)],
+            pts[np.argmax(diff)]
+        ], dtype="float32")
         (tl, tr, br, bl) = rect
-        w = max(int(np.linalg.norm(br - bl)), int(np.linalg.norm(tr - tl)))
-        h = max(int(np.linalg.norm(tr - br)), int(np.linalg.norm(tl - bl)))
-        dst = np.array([[0,0],[w-1,0],[w-1,h-1],[0,h-1]], dtype="float32")
+        w2 = max(int(np.linalg.norm(br - bl)), int(np.linalg.norm(tr - tl)))
+        h2 = max(int(np.linalg.norm(tr - br)), int(np.linalg.norm(tl - bl)))
+        dst = np.array([[0,0],[w2-1,0],[w2-1,h2-1],[0,h2-1]], dtype="float32")
         M = cv2.getPerspectiveTransform(rect, dst)
-        warped = cv2.warpPerspective(orig, M, (w, h))
-        result = warped
+        result = cv2.warpPerspective(orig, M, (w2, h2))
     else:
-        result = orig
-    gray2 = cv2.cvtColor(result, cv2.COLOR_BGR2GRAY)
-    final = cv2.adaptiveThreshold(gray2, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+        # Nessun documento trovato: ritaglia bordi bianchi automaticamente
+        gray2 = cv2.cvtColor(orig, cv2.COLOR_BGR2GRAY)
+        _, thresh = cv2.threshold(gray2, 240, 255, cv2.THRESH_BINARY_INV)
+        coords = cv2.findNonZero(thresh)
+        if coords is not None:
+            x, y, w3, h3 = cv2.boundingRect(coords)
+            padding = 20
+            x = max(0, x - padding)
+            y = max(0, y - padding)
+            w3 = min(orig.shape[1] - x, w3 + padding * 2)
+            h3 = min(orig.shape[0] - y, h3 + padding * 2)
+            result = orig[y:y+h3, x:x+w3]
+        else:
+            result = orig
+    
+    return result
+
+def scan_document(image_bytes):
+    nparr = np.frombuffer(image_bytes, np.uint8)
+    img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+    
+    # Ritaglia e raddrizza
+    cropped = crop_document(img)
+    
+    # Converti in bianco/nero stile scanner
+    gray = cv2.cvtColor(cropped, cv2.COLOR_BGR2GRAY)
+    final = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
                                    cv2.THRESH_BINARY, 11, 10)
-    # Converti direttamente in PDF
+    
+    # Converti in PDF
     pil_img = Image.fromarray(final)
     pdf_buf = io.BytesIO()
     pil_img.convert('RGB').save(pdf_buf, format='PDF', resolution=300)
