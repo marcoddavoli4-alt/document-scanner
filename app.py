@@ -41,29 +41,20 @@ def crop_document(img):
     ratio = h / 1000.0
     small = cv2.resize(img, (int(w / ratio), 1000))
 
-    # Converti in grigio
     gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
-
-    # Sfoca per ridurre rumore
     blur = cv2.GaussianBlur(gray, (7, 7), 0)
-
-    # Soglia per trovare il documento bianco su sfondo scuro
     _, thresh = cv2.threshold(blur, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
 
-    # Morfologia per riempire buchi
     kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (15, 15))
     closed = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel)
     closed = cv2.morphologyEx(closed, cv2.MORPH_OPEN, kernel)
 
-    # Trova contorni
     cnts, _ = cv2.findContours(closed, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     if not cnts:
         return orig
 
-    # Prende il contorno più grande (il documento)
     c = max(cnts, key=cv2.contourArea)
 
-    # Verifica che sia abbastanza grande (almeno 20% dell'immagine)
     if cv2.contourArea(c) < (small.shape[0] * small.shape[1] * 0.2):
         return orig
 
@@ -71,11 +62,9 @@ def crop_document(img):
     approx = cv2.approxPolyDP(c, 0.02 * peri, True)
 
     if len(approx) == 4:
-        # Raddrizza prospettiva
         pts = approx.reshape(4, 2).astype("float32") * ratio
         result = four_point_transform(orig, pts)
     else:
-        # Bounding rect con piccolo padding
         x, y, bw, bh = cv2.boundingRect(c)
         pad = 10
         x = max(0, int(x * ratio) - pad)
@@ -89,6 +78,12 @@ def crop_document(img):
 def scan_document(image_bytes):
     nparr = np.frombuffer(image_bytes, np.uint8)
     img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+
+    # Upscaling se l'immagine è troppo piccola
+    h, w = img.shape[:2]
+    if max(h, w) < 2000:
+        scale = 2000 / max(h, w)
+        img = cv2.resize(img, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_CUBIC)
 
     # Ritaglia e raddrizza
     cropped = crop_document(img)
