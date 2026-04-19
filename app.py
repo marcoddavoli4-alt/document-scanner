@@ -73,24 +73,24 @@ def scan_document(image_bytes):
     nparr = np.frombuffer(image_bytes, np.uint8)
     img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
 
-    # Upscaling aggressivo per foto compresse da Telegram
+    # Upscaling con Lanczos
     h, w = img.shape[:2]
-    target = 3000
-    if max(h, w) < target:
-        scale = target / max(h, w)
+    if max(h, w) < 3000:
+        scale = 3000 / max(h, w)
         img = cv2.resize(img, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_LANCZOS4)
 
     # Ritaglia e raddrizza
     cropped = crop_document(img)
 
-    # Nitidezza prima della soglia
-    kernel_sharp = np.array([[0, -1, 0], [-1, 5, -1], [0, -1, 0]])
-    cropped = cv2.filter2D(cropped, -1, kernel_sharp)
-
-    # Converti in bianco/nero stile scanner
+    # Converti in grigio
     gray = cv2.cvtColor(cropped, cv2.COLOR_BGR2GRAY)
-    final = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-                                   cv2.THRESH_BINARY, 15, 10)
+
+    # Riduci rumore JPEG prima della soglia
+    denoised = cv2.fastNlMeansDenoising(gray, h=10, templateWindowSize=7, searchWindowSize=21)
+
+    # Soglia adattiva pulita
+    final = cv2.adaptiveThreshold(denoised, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+                                   cv2.THRESH_BINARY, 21, 15)
 
     # Converti in PDF
     pil_img = Image.fromarray(final)
