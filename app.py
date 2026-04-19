@@ -26,11 +26,7 @@ def four_point_transform(image, pts):
     heightA = np.sqrt(((tr[0] - br[0]) ** 2) + ((tr[1] - br[1]) ** 2))
     heightB = np.sqrt(((tl[0] - bl[0]) ** 2) + ((tl[1] - bl[1]) ** 2))
     maxHeight = max(int(heightA), int(heightB))
-    dst = np.array([
-        [0, 0],
-        [maxWidth - 1, 0],
-        [maxWidth - 1, maxHeight - 1],
-        [0, maxHeight - 1]], dtype="float32")
+    dst = np.array([[0,0],[maxWidth-1,0],[maxWidth-1,maxHeight-1],[0,maxHeight-1]], dtype="float32")
     M = cv2.getPerspectiveTransform(rect, dst)
     warped = cv2.warpPerspective(image, M, (maxWidth, maxHeight))
     return warped
@@ -44,7 +40,6 @@ def crop_document(img):
     gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
     blur = cv2.GaussianBlur(gray, (7, 7), 0)
     _, thresh = cv2.threshold(blur, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-
     kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (15, 15))
     closed = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel)
     closed = cv2.morphologyEx(closed, cv2.MORPH_OPEN, kernel)
@@ -54,7 +49,6 @@ def crop_document(img):
         return orig
 
     c = max(cnts, key=cv2.contourArea)
-
     if cv2.contourArea(c) < (small.shape[0] * small.shape[1] * 0.2):
         return orig
 
@@ -79,19 +73,24 @@ def scan_document(image_bytes):
     nparr = np.frombuffer(image_bytes, np.uint8)
     img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
 
-    # Upscaling se l'immagine è troppo piccola
+    # Upscaling aggressivo per foto compresse da Telegram
     h, w = img.shape[:2]
-    if max(h, w) < 2000:
-        scale = 2000 / max(h, w)
-        img = cv2.resize(img, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_CUBIC)
+    target = 3000
+    if max(h, w) < target:
+        scale = target / max(h, w)
+        img = cv2.resize(img, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_LANCZOS4)
 
     # Ritaglia e raddrizza
     cropped = crop_document(img)
 
+    # Nitidezza prima della soglia
+    kernel_sharp = np.array([[0, -1, 0], [-1, 5, -1], [0, -1, 0]])
+    cropped = cv2.filter2D(cropped, -1, kernel_sharp)
+
     # Converti in bianco/nero stile scanner
     gray = cv2.cvtColor(cropped, cv2.COLOR_BGR2GRAY)
     final = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-                                   cv2.THRESH_BINARY, 11, 10)
+                                   cv2.THRESH_BINARY, 15, 10)
 
     # Converti in PDF
     pil_img = Image.fromarray(final)
