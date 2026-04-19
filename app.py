@@ -36,25 +36,20 @@ def crop_document(img):
     h, w = img.shape[:2]
     ratio = h / 1000.0
     small = cv2.resize(img, (int(w / ratio), 1000))
-
     gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
     blur = cv2.GaussianBlur(gray, (7, 7), 0)
     _, thresh = cv2.threshold(blur, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
     kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (15, 15))
     closed = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel)
     closed = cv2.morphologyEx(closed, cv2.MORPH_OPEN, kernel)
-
     cnts, _ = cv2.findContours(closed, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     if not cnts:
         return orig
-
     c = max(cnts, key=cv2.contourArea)
     if cv2.contourArea(c) < (small.shape[0] * small.shape[1] * 0.2):
         return orig
-
     peri = cv2.arcLength(c, True)
     approx = cv2.approxPolyDP(c, 0.02 * peri, True)
-
     if len(approx) == 4:
         pts = approx.reshape(4, 2).astype("float32") * ratio
         result = four_point_transform(orig, pts)
@@ -66,17 +61,16 @@ def crop_document(img):
         bw = min(w - x, int(bw * ratio) + pad * 2)
         bh = min(h - y, int(bh * ratio) + pad * 2)
         result = orig[y:y+bh, x:x+bw]
-
     return result
 
 def scan_document(image_bytes):
     nparr = np.frombuffer(image_bytes, np.uint8)
     img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
 
-    # Upscaling con Lanczos
+    # Upscaling moderato (2000px invece di 3000 per non sovraccaricare)
     h, w = img.shape[:2]
-    if max(h, w) < 3000:
-        scale = 3000 / max(h, w)
+    if max(h, w) < 2000:
+        scale = 2000 / max(h, w)
         img = cv2.resize(img, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_LANCZOS4)
 
     # Ritaglia e raddrizza
@@ -85,11 +79,11 @@ def scan_document(image_bytes):
     # Converti in grigio
     gray = cv2.cvtColor(cropped, cv2.COLOR_BGR2GRAY)
 
-    # Riduci rumore JPEG prima della soglia
-    denoised = cv2.fastNlMeansDenoising(gray, h=10, templateWindowSize=7, searchWindowSize=21)
+    # Blur leggero per ridurre rumore JPEG (molto più veloce di fastNlMeans)
+    gray = cv2.GaussianBlur(gray, (3, 3), 0)
 
-    # Soglia adattiva pulita
-    final = cv2.adaptiveThreshold(denoised, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+    # Soglia adattiva
+    final = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
                                    cv2.THRESH_BINARY, 21, 15)
 
     # Converti in PDF
