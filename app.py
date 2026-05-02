@@ -1,4 +1,4 @@
-from flask import Flask, request, send_file
+from flask import Flask, request, send_file, jsonify
 import cv2
 import numpy as np
 import io
@@ -6,6 +6,7 @@ from pdf2image import convert_from_bytes
 from PIL import Image
 
 app = Flask(__name__)
+
 
 def order_points(pts):
     rect = np.zeros((4, 2), dtype="float32")
@@ -17,6 +18,7 @@ def order_points(pts):
     rect[3] = pts[np.argmax(diff)]
     return rect
 
+
 def four_point_transform(image, pts):
     rect = order_points(pts)
     (tl, tr, br, bl) = rect
@@ -26,10 +28,14 @@ def four_point_transform(image, pts):
     heightA = np.sqrt(((tr[0] - br[0]) ** 2) + ((tr[1] - br[1]) ** 2))
     heightB = np.sqrt(((tl[0] - bl[0]) ** 2) + ((tl[1] - bl[1]) ** 2))
     maxHeight = max(int(heightA), int(heightB))
-    dst = np.array([[0,0],[maxWidth-1,0],[maxWidth-1,maxHeight-1],[0,maxHeight-1]], dtype="float32")
+    dst = np.array(
+        [[0, 0], [maxWidth - 1, 0], [maxWidth - 1, maxHeight - 1], [0, maxHeight - 1]],
+        dtype="float32",
+    )
     M = cv2.getPerspectiveTransform(rect, dst)
     warped = cv2.warpPerspective(image, M, (maxWidth, maxHeight))
     return warped
+
 
 def crop_document(img):
     orig = img.copy()
@@ -60,12 +66,17 @@ def crop_document(img):
         y = max(0, int(y * ratio) - pad)
         bw = min(w - x, int(bw * ratio) + pad * 2)
         bh = min(h - y, int(bh * ratio) + pad * 2)
-        result = orig[y:y+bh, x:x+bw]
+        result = orig[y : y + bh, x : x + bw]
     return result
+
 
 def scan_document(image_bytes):
     nparr = np.frombuffer(image_bytes, np.uint8)
     img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+
+    # Validazione: se l'immagine non è decodificabile, solleva un errore chiaro
+    if img is None:
+        raise ValueError("Impossibile decodificare l'immagine. Formato non supportato o file corrotto.")
 
     # Upscaling moderato (2000px invece di 3000 per non sovraccaricare)
     h, w = img.shape[:2]
@@ -79,37 +90,62 @@ def scan_document(image_bytes):
     # Converti in grigio
     gray = cv2.cvtColor(cropped, cv2.COLOR_BGR2GRAY)
 
-    # Blur leggero per ridurre rumore JPEG (molto più veloce di fastNlMeans)
+    # Blur leggero per ridurre rumore JPEG
     gray = cv2.GaussianBlur(gray, (3, 3), 0)
 
     # Soglia adattiva
-    final = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-                                   cv2.THRESH_BINARY, 21, 15)
+    final = cv2.adaptiveThreshold(
+        gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 21, 15
+    )
 
     # Converti in PDF
     pil_img = Image.fromarray(final)
     pdf_buf = io.BytesIO()
-    pil_img.convert('RGB').save(pdf_buf, format='PDF', resolution=300)
+    pil_img.convert("RGB").save(pdf_buf, format="PDF", resolution=300)
     pdf_buf.seek(0)
     return pdf_buf.read()
 
-@app.route('/scan', methods=['POST'])
+
+@app.route("/ping", methods=["GET"])
+def ping():
+    """Endpoint keep-alive: usato da n8n per mantenere attivo il server su Render."""
+    return jsonify({"status": "pong"})
+
+
+@app.route("/health", methods=["GET"])
+def health():
+    return jsonify({"status": "ok"})
+
+
+@app.route("/scan", methods=["POST"])
 def scan():
     data = request.data
+
+    if not data:
+        return jsonify({"error": "Nessun dato ricevuto nel body della richiesta."}), 400
+
+    # Prova a interpretarlo come PDF, altrimenti trattalo come immagine diretta
     try:
         images = convert_from_bytes(data, dpi=300)
         img_pil = images[0]
         buf = io.BytesIO()
-        img_pil.save(buf, format='PNG')
+        img_pil.save(buf, format="PNG")
         image_bytes = buf.getvalue()
     except Exception:
         image_bytes = data
-    scanned_pdf = scan_document(image_bytes)
-    return send_file(io.BytesIO(scanned_pdf), mimetype='application/pdf')
 
-@app.route('/health')
-def health():
-    return {"status": "ok"}
+    try:
+        scanned_pdf = scan_document(image_bytes)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 422
 
-if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000)
+    return send_file(
+        io.BytesIO(scanned_pdf),
+        mimetype="application/pdf",
+        as_attachment=True,
+        download_name="documento_scansionato.pdf",
+    )
+
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=5000)
